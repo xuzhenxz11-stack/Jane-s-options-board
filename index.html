@@ -23,8 +23,23 @@ td.tag{color:var(--ac);font-weight:700}
 tr.spot td{background:var(--ac);color:#fff;text-align:center;font-weight:700;padding:3px}
 .up{color:var(--up)}.dn{color:var(--dn)}
 .grp th{text-align:center;color:var(--fg)}
+details.sm{margin:6px 16px 10px;border:1px solid var(--bd);border-radius:8px;padding:8px 12px}
+details.sm summary{cursor:pointer;font-weight:700;font-size:14px}
+.pick{margin:8px 0;padding:10px 12px;border-left:3px solid var(--ac);background:var(--hd);line-height:1.6}
+.sm table{min-width:760px}.sm tr[data-s]{cursor:pointer}.sm td:first-child,.sm th:first-child{text-align:left}
+td.hint{text-align:left;white-space:normal;min-width:150px;max-width:230px;font-size:12px;color:var(--dn)}
 </style></head><body>
 <header><h1>Jane 期权数据看板</h1><span class="mut" id="upd"></span></header>
+<details class="sm" open><summary>卖Put选股 Summary</summary>
+ <div class="ctl" style="padding:8px 0">
+  <label>资金 $<input id="cap" type="number" value="100000" style="width:90px"></label>
+  <label>行权价至少低于现价 <input id="dist" type="number" value="10" style="width:46px">%</label>
+  <label>最少到期天数 <input id="mind" type="number" value="7" style="width:46px"></label>
+  <label>最低持仓量 <input id="minoi" type="number" value="100" style="width:56px"></label>
+ </div>
+ <div id="pick"></div><div class="wrap" style="padding:0"><table id="st"></table></div>
+ <div class="mut" style="margin-top:6px">打分=年化收益(按买入价)×不行权概率。已剔除：无买价、买卖价差&gt;25%、持仓量过低的合约。数据不含财报日期，请自行核对。点击表格行可跳转到该合约。</div>
+</details>
 <div class="bar" id="tk"></div>
 <div class="bar" id="ex"></div>
 <div class="ctl">
@@ -47,7 +62,41 @@ function init(){
  $('tk').innerHTML=ks.map(s=>`<button class="chip" data-s="${s}">${s}</button>`).join('');
  $('tk').onclick=e=>{if(e.target.dataset.s){sym=e.target.dataset.s;ei=0;draw()}};
  $('ex').onclick=e=>{if(e.target.dataset.i!=null){ei=+e.target.dataset.i;draw()}};
- $('basis').onchange=$('rng').oninput=draw;draw();
+ $('basis').onchange=$('rng').oninput=draw;
+ ['cap','dist','mind','minoi'].forEach(i=>$(i).oninput=summary);
+ $('st').onclick=e=>{const r=e.target.closest('tr[data-s]');if(r){sym=r.dataset.s;ei=+r.dataset.i;draw();$('ex').scrollIntoView()}};
+ summary();draw();
+}
+function hint(o,isCall,k,S,dte,ann,itm){
+ if(!o)return'';const h=[];
+ if(itm)h.push('价内：权利金含内在价值，年化不适用');
+ if(dte<=2)h.push('≤2天：年化被放大，隔夜跳空/事件风险大');
+ if(!o.bid)h.push('无买价，难成交');else if(o.mid&&(o.ask-o.bid)/o.mid>0.25)h.push('买卖价差大，实际成交价低于中间价');
+ if((o.oi??0)<100)h.push('持仓量低，流动性差');
+ if(ann!=null&&ann>1)h.push('年化>100%：多为高波动/财报事件/报价失真，务必核对IV与下行风险');
+ if(!isCall&&!itm&&Math.abs(k/S-1)<0.02)h.push('离现价&lt;2%，极易被行权');
+ return h.join('；');
+}
+function summary(){
+ const cap=+$('cap').value,d=+$('dist').value/100,mind=+$('mind').value,moi=+$('minoi').value;
+ const best=[];
+ for(const [s,T] of Object.entries(D.tickers)){let b=null;
+  T.expiries.forEach((X,i)=>{if(X.dte<mind)return;
+   for(const w of X.rows){const p=w.p;if(!p||w.k>T.spot*(1-d)||!p.bid||p.itm==null)continue;
+    if((p.ask-p.bid)/p.mid>0.25||(p.oi??0)<moi)continue;
+    const ann=p.bid/w.k*365/X.dte,pn=1-p.itm,sc=ann*pn;
+    if(!b||sc>b.sc)b={s,i,date:X.date,dte:X.dte,k:w.k,S:T.spot,bid:p.bid,ann,pn,sc,iv:w.iv,oi:p.oi}}});
+  if(b)best.push(b)}
+ best.sort((a,b)=>b.sc-a.sc);
+ if(!best.length){$('pick').innerHTML='<div class="pick">没有满足条件的合约，请放宽条件。</div>';$('st').innerHTML='';return}
+ const t=best[0],n=Math.floor(cap/(t.k*100)),dd=(1-t.k/t.S)*100;
+ $('pick').innerHTML=`<div class="pick"><b>首选：${t.s} ${t.date}（${t.dte}天）卖 Put，行权价 ${t.k}</b>（低于现价 ${dd.toFixed(1)}%）<br>
+ 每张收权利金约 $${(t.bid*100).toFixed(0)}，占用资金 $${(t.k*100).toLocaleString()}；年化 ${pc(t.ann,1)}，不行权概率约 ${pc(t.pn,0)}，盈亏平衡价 ${f(t.k-t.bid)}。
+ 按 $${cap.toLocaleString()} 资金可卖 ${n} 张，预计权利金 $${(n*t.bid*100).toFixed(0)}。<br>
+ <b>为什么选它：</b>在全部满足条件（行权价≥${(d*100).toFixed(0)}%安全垫、到期≥${mind}天、流动性合格）的标的里，“年化×不行权概率”得分最高；行权价离现价有缓冲，且买卖价差和持仓量合格。
+ <b>风险：</b>年化越高通常意味着波动越大，若股价跌破 ${f(t.k-t.bid)} 就开始亏损；请自行确认到期前有无财报等事件。</div>`;
+ $('st').innerHTML='<tr><th>标的</th><th>到期日(天)</th><th>行权价</th><th>距现价</th><th>买入价</th><th>年化</th><th>不行权概率</th><th>IV</th><th>持仓量</th><th>可卖张数</th><th>预计权利金</th></tr>'+
+ best.map((b,j)=>{const n=Math.floor(cap/(b.k*100));return `<tr data-s="${b.s}" data-i="${b.i}"${j==0?' style="font-weight:700"':''}><td>${b.s}${j==0?' ★':''}</td><td>${b.date.slice(5)} (${b.dte})</td><td>${b.k}</td><td>-${((1-b.k/b.S)*100).toFixed(1)}%</td><td>${f(b.bid)}</td><td>${pc(b.ann,1)}</td><td>${pc(b.pn,0)}</td><td>${pc(b.iv,0)}</td><td>${b.oi??'-'}</td><td>${n}</td><td>$${(n*b.bid*100).toFixed(0)}</td></tr>`}).join('');
 }
 function draw(){
  const T=D.tickers[sym];
@@ -55,20 +104,22 @@ function draw(){
  $('ex').innerHTML=T.expiries.map((x,i)=>`<button class="chip ${i==ei?'on':''}" data-i="${i}">${x.date.slice(5).replace('-','/')} (${x.dte}天)</button>`).join('');
  const X=T.expiries[ei];if(!X){$('t').innerHTML='<tr><td>无数据</td></tr>';return}
  const S=T.spot,r=+$('rng').value/100,b=$('basis').value,n=Math.max(X.dte,0.5);
- $('note').textContent=`${sym} 现价 ${f(S)} (${T.chg>0?'+':''}${pc(T.chg)})　卖Put年化=权利金/行权价×365/${X.dte}；卖Call年化=权利金/现价×365/${X.dte}`;
+ $('note').textContent=`${sym} 现价 ${f(S)} (${T.chg>0?'+':''}${pc(T.chg)})　卖Put年化=权利金/行权价×365/${X.dte}；卖Call年化=权利金/现价×365/${X.dte}（价内合约不计算）`;
  const px=o=>o?(b=='bid'?o.bid:o.mid):null;
  const rows=X.rows.filter(w=>Math.abs(w.k/S-1)<=r);
- let h=`<tr class="grp"><th colspan="9">Call</th><th colspan="2">${sym}</th><th colspan="9">Put</th></tr>
- <tr><th>卖Call年化</th><th>价内概率</th><th>标记价</th><th>涨跌额</th><th>最新价</th><th>中间价</th><th>卖出价</th><th>买入价</th><th>OI</th><th>行权价</th><th>IV</th><th>买入价</th><th>卖出价</th><th>中间价</th><th>最新价</th><th>涨跌额</th><th>OI</th><th>价内概率</th><th>卖Put年化</th></tr>`;
+ let h=`<tr class="grp"><th colspan="10">Call</th><th colspan="2">${sym}</th><th colspan="10">Put</th></tr>
+ <tr><th>Call提示</th><th>卖Call年化</th><th>价内概率</th><th>标记价</th><th>涨跌额</th><th>最新价</th><th>中间价</th><th>卖出价</th><th>买入价</th><th>OI</th><th>行权价</th><th>IV</th><th>买入价</th><th>卖出价</th><th>中间价</th><th>最新价</th><th>涨跌额</th><th>OI</th><th>价内概率</th><th>卖Put年化</th><th>Put提示</th></tr>`;
  let placed=false;
  for(const w of rows){
-  if(!placed&&w.k>S){h+=`<tr class="spot"><td colspan="20">${sym} ${f(S)}</td></tr>`;placed=true}
+  if(!placed&&w.k>S){h+=`<tr class="spot"><td colspan="22">${sym} ${f(S)}</td></tr>`;placed=true}
   const c=w.c,p=w.p;
-  const cy=c&&px(c)?px(c)/S*365/n:null, py=p&&px(p)?px(p)/w.k*365/n:null;
+  const cI=w.k<=S,pI=w.k>=S;
+  const cy=c&&px(c)&&!cI?px(c)/S*365/n:null, py=p&&px(p)&&!pI?px(p)/w.k*365/n:null;
+  const ch=hint(c,true,w.k,S,X.dte,cy,cI), ph=hint(p,false,w.k,S,X.dte,py,pI);
   h+=`<tr class="${w.k<S?'itmc':'itmp'}">
-  <td class="tag c">${pc(cy,1)}</td><td class="c">${pc(c?.itm,1)}</td><td class="c">${f(c?.mid)}</td><td class="c ${cl(c?.chg)}">${f(c?.chg)}</td><td class="c">${f(c?.last)}</td><td class="c">${f(c?.mid)}</td><td class="c">${f(c?.ask)}</td><td class="c">${f(c?.bid)}</td><td class="c mut">${c?.oi??'-'}</td>
+  <td class="hint c">${ch}</td><td class="tag c">${pc(cy,1)}</td><td class="c">${pc(c?.itm,1)}</td><td class="c">${f(c?.mid)}</td><td class="c ${cl(c?.chg)}">${f(c?.chg)}</td><td class="c">${f(c?.last)}</td><td class="c">${f(c?.mid)}</td><td class="c">${f(c?.ask)}</td><td class="c">${f(c?.bid)}</td><td class="c mut">${c?.oi??'-'}</td>
   <td class="k">${w.k}</td><td>${pc(w.iv,1)}</td>
-  <td class="p">${f(p?.bid)}</td><td class="p">${f(p?.ask)}</td><td class="p">${f(p?.mid)}</td><td class="p">${f(p?.last)}</td><td class="p ${cl(p?.chg)}">${f(p?.chg)}</td><td class="p mut">${p?.oi??'-'}</td><td class="p">${pc(p?.itm,1)}</td><td class="tag p">${pc(py,1)}</td></tr>`;
+  <td class="p">${f(p?.bid)}</td><td class="p">${f(p?.ask)}</td><td class="p">${f(p?.mid)}</td><td class="p">${f(p?.last)}</td><td class="p ${cl(p?.chg)}">${f(p?.chg)}</td><td class="p mut">${p?.oi??'-'}</td><td class="p">${pc(p?.itm,1)}</td><td class="tag p">${pc(py,1)}</td><td class="hint p">${ph}</td></tr>`;
  }
  $('t').innerHTML=h;
 }
