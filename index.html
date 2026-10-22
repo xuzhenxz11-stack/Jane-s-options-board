@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jane 期权数据看板</title>
+<style>
+:root{--bg:#fff;--fg:#1d2129;--mut:#86909c;--bd:#e5e6eb;--hd:#f7f8fa;--itm:#f2f7ff;--up:#0a9d5f;--dn:#e5393a;--ac:#165dff}
+@media(prefers-color-scheme:dark){:root{--bg:#17181c;--fg:#e8e9ec;--mut:#8b919c;--bd:#2c2e35;--hd:#1f2127;--itm:#1c2433;--up:#3ccf8e;--dn:#f06565;--ac:#5b8cff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+header{padding:14px 16px 6px;display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+h1{font-size:18px;margin:0}.mut{color:var(--mut)}
+.bar{padding:4px 16px;display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--bd);background:var(--hd);color:var(--fg);border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
+.chip.on{border-color:var(--ac);color:var(--ac);background:var(--bg);font-weight:600}
+.ctl{padding:6px 16px;display:flex;flex-wrap:wrap;gap:16px;align-items:center}
+select,input{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:3px 6px}
+.wrap{overflow-x:auto;padding:0 16px 24px}
+table{border-collapse:collapse;width:100%;min-width:1100px;text-align:right;font-variant-numeric:tabular-nums}
+th,td{padding:5px 8px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{background:var(--hd);color:var(--mut);font-weight:500;position:sticky;top:0}
+td.k{text-align:center;font-weight:700;background:var(--hd)}
+tr.itmc td.c,tr.itmp td.p{background:var(--itm)}
+td.tag{color:var(--ac);font-weight:700}
+tr.spot td{background:var(--ac);color:#fff;text-align:center;font-weight:700;padding:3px}
+.up{color:var(--up)}.dn{color:var(--dn)}
+.grp th{text-align:center;color:var(--fg)}
+</style></head><body>
+<header><h1>Jane 期权数据看板</h1><span class="mut" id="upd"></span></header>
+<div class="bar" id="tk"></div>
+<div class="bar" id="ex"></div>
+<div class="ctl">
+ <label>价格口径 <select id="basis"><option value="mid">中间价</option><option value="bid">买入价(保守)</option></select></label>
+ <label>行权价范围 ±<input id="rng" type="number" value="10" min="1" max="100" style="width:56px">%</label>
+ <span class="mut" id="note"></span>
+</div>
+<div class="wrap"><table id="t"></table></div>
+<script src="data.js"></script>
+<script>
+const D=window.OPTIONS_DATA;let sym,ei=0;
+const $=id=>document.getElementById(id);
+const f=(v,d=2)=>v==null?'-':v.toFixed(d);
+const pc=(v,d=2)=>v==null?'-':(v*100).toFixed(d)+'%';
+const cl=v=>v>0?'up':v<0?'dn':'';
+function init(){
+ if(!D){$('upd').textContent='未找到 data.js：请先运行 python update_options.py';return}
+ $('upd').textContent='数据更新于 '+D.updated;
+ const ks=Object.keys(D.tickers);sym=ks[0];
+ $('tk').innerHTML=ks.map(s=>`<button class="chip" data-s="${s}">${s}</button>`).join('');
+ $('tk').onclick=e=>{if(e.target.dataset.s){sym=e.target.dataset.s;ei=0;draw()}};
+ $('ex').onclick=e=>{if(e.target.dataset.i!=null){ei=+e.target.dataset.i;draw()}};
+ $('basis').onchange=$('rng').oninput=draw;draw();
+}
+function draw(){
+ const T=D.tickers[sym];
+ document.querySelectorAll('#tk .chip').forEach(b=>b.classList.toggle('on',b.dataset.s==sym));
+ $('ex').innerHTML=T.expiries.map((x,i)=>`<button class="chip ${i==ei?'on':''}" data-i="${i}">${x.date.slice(5).replace('-','/')} (${x.dte}天)</button>`).join('');
+ const X=T.expiries[ei];if(!X){$('t').innerHTML='<tr><td>无数据</td></tr>';return}
+ const S=T.spot,r=+$('rng').value/100,b=$('basis').value,n=Math.max(X.dte,0.5);
+ $('note').textContent=`${sym} 现价 ${f(S)} (${T.chg>0?'+':''}${pc(T.chg)})　卖Put年化=权利金/行权价×365/${X.dte}；卖Call年化=权利金/现价×365/${X.dte}`;
+ const px=o=>o?(b=='bid'?o.bid:o.mid):null;
+ const rows=X.rows.filter(w=>Math.abs(w.k/S-1)<=r);
+ let h=`<tr class="grp"><th colspan="9">Call</th><th colspan="2">${sym}</th><th colspan="9">Put</th></tr>
+ <tr><th>卖Call年化</th><th>价内概率</th><th>标记价</th><th>涨跌额</th><th>最新价</th><th>中间价</th><th>卖出价</th><th>买入价</th><th>OI</th><th>行权价</th><th>IV</th><th>买入价</th><th>卖出价</th><th>中间价</th><th>最新价</th><th>涨跌额</th><th>OI</th><th>价内概率</th><th>卖Put年化</th></tr>`;
+ let placed=false;
+ for(const w of rows){
+  if(!placed&&w.k>S){h+=`<tr class="spot"><td colspan="20">${sym} ${f(S)}</td></tr>`;placed=true}
+  const c=w.c,p=w.p;
+  const cy=c&&px(c)?px(c)/S*365/n:null, py=p&&px(p)?px(p)/w.k*365/n:null;
+  h+=`<tr class="${w.k<S?'itmc':'itmp'}">
+  <td class="tag c">${pc(cy,1)}</td><td class="c">${pc(c?.itm,1)}</td><td class="c">${f(c?.mid)}</td><td class="c ${cl(c?.chg)}">${f(c?.chg)}</td><td class="c">${f(c?.last)}</td><td class="c">${f(c?.mid)}</td><td class="c">${f(c?.ask)}</td><td class="c">${f(c?.bid)}</td><td class="c mut">${c?.oi??'-'}</td>
+  <td class="k">${w.k}</td><td>${pc(w.iv,1)}</td>
+  <td class="p">${f(p?.bid)}</td><td class="p">${f(p?.ask)}</td><td class="p">${f(p?.mid)}</td><td class="p">${f(p?.last)}</td><td class="p ${cl(p?.chg)}">${f(p?.chg)}</td><td class="p mut">${p?.oi??'-'}</td><td class="p">${pc(p?.itm,1)}</td><td class="tag p">${pc(py,1)}</td></tr>`;
+ }
+ $('t').innerHTML=h;
+}
+init();
+</script></body></html>
