@@ -7,6 +7,7 @@
   (北京时间 05:30 附近，按需调整)  Windows: 任务计划程序每日运行
 """
 import json, math, datetime as dt
+from zoneinfo import ZoneInfo
 import yfinance as yf
 
 # 请核对代码: SPCX(SpaceX)、SKHY(美股海力士)若取不到数据会自动跳过
@@ -73,7 +74,7 @@ def fetch(sym):
 
 
 def main():
-    data = {"updated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "tickers": {}}
+    data = {"updated": dt.datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") + "（北京时间）", "tickers": {}}
     for s in TICKERS:
         try:
             data["tickers"][s] = fetch(s)
